@@ -1,0 +1,22 @@
+# Node
+node_modules/
+dist/
+
+# Python
+__pycache__/
+venv/
+env/
+*.pyc
+
+# Database
+*.db
+.db
+database.db
+style_finder.db
+
+# Secrets (CRITICAL)
+.env
+.env.local
+.env.*
+firebase-adminsdk.json
+firebase-credentials.json

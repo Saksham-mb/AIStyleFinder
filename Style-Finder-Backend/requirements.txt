@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+sqlmodel
+firebase-admin
+google-generativeai
+cloudinary
+requests
+python-multipart
+python-dotenv
+google-search-results

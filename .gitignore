@@ -1,0 +1,36 @@
+# Node
+node_modules/
+dist/
+dist-ssr/
+
+# Python
+__pycache__/
+venv/
+env/
+.venv/
+*.pyc
+
+# Database
+*.db
+.db
+database.db
+style_finder.db
+
+# Secrets (CRITICAL)
+.env
+.env.local
+.env.*
+!.env.example
+firebase-adminsdk.json
+firebase-credentials.json
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
