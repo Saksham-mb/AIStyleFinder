@@ -18,9 +18,10 @@ import cloudinary.uploader
 from typing import Optional
 
 # Initialize the Firebase Vault using your hidden JSON file
-if not firebase_admin._apps:
-    cred = credentials.Certificate("firebase-credentials.json")
-    firebase_admin.initialize_app(cred)
+firebase_path = "/etc/secrets/firebase-credentials.json" if os.path.exists("/etc/secrets/firebase-credentials.json") else "firebase-credentials.json"
+
+cred = credentials.Certificate(firebase_path)
+firebase_admin.initialize_app(cred)
 
 # This tells FastAPI to expect a "Bearer Token" in the request headers
 security = HTTPBearer()
