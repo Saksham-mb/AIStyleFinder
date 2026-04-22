@@ -1,6 +1,9 @@
 import os
 import json
-from fastapi import FastAPI, UploadFile, File, HTTPException, status, Depends, Security
+from fastapi import FastAPI, UploadFile, File, HTTPException, status, Depends, Security, Request
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import google.generativeai as genai
@@ -25,6 +28,7 @@ firebase_admin.initialize_app(cred)
 
 # This tells FastAPI to expect a "Bearer Token" in the request headers
 security = HTTPBearer()
+app = FastAPI()
 
 def verify_firebase_token(credentials: HTTPAuthorizationCredentials = Security(security)):
     try:
@@ -68,7 +72,12 @@ cloudinary.config(
   secure = True
 )
 
-app = FastAPI()
+
+# --- THE SHIELD: Rate Limiting Setup ---
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 
 @app.on_event("startup")
 def on_startup():
@@ -79,7 +88,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
+    allow_origins=["http://localhost:5173",FRONTEND_URL],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -97,7 +106,9 @@ class SearchRequest(BaseModel):
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 @app.post("/api/analyze-image")
+@limiter.limit("2/minute")
 async def analyze_image(
+    request: Request,
     file: UploadFile = File(...),
     user_token: dict = Depends(verify_firebase_token)
     ):
@@ -145,19 +156,32 @@ async def analyze_image(
         response = model.generate_content([prompt, image_parts[0]])
         clean_text = response.text.strip().strip('`').replace('json\n', '')
         items = json.loads(clean_text)
+        if not isinstance(items, list) or not all(isinstance(i, str) for i in items):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+                detail="AI returned unexpected format."
+            )
         return {"items": items, "imageUrl":secure_image_url}
     except Exception as e:
         print(f"Gemini Error: {e}")
-        return {"items": ["Error detecting items."],"imageUrl": None}
-
-
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail="AI failed to analyze the image.")
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 @app.post("/api/search-dupes")
-def search_dupes(request: SearchRequest, user_token: dict = Depends(verify_firebase_token)):
+@limiter.limit("1/minute")
+def search_dupes(request: Request, search_request: SearchRequest, user_token: dict = Depends(verify_firebase_token)):
     final_results = []
-
+    if len(search_request.items) > 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Maximum 5 items per search."
+        )
+    if search_request.image_url and not search_request.image_url.startswith("https://res.cloudinary.com/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid image source."
+        )
     # Helper function to strip "₹" and commas so Pandas can do math later
     def clean_price_string(price_str):
         if not price_str: return 0
@@ -165,7 +189,7 @@ def search_dupes(request: SearchRequest, user_token: dict = Depends(verify_fireb
         return int(digits) if digits else 0
 
     # 2. Loop through Gemini's items
-    for item in request.items:
+    for item in search_request.items:
         params = {
             "engine": "google_shopping",
             "q": f"{item} india online",
@@ -194,13 +218,13 @@ def search_dupes(request: SearchRequest, user_token: dict = Depends(verify_fireb
                         "type": "Premium Match",
                         "brand": premium_match.get("source", "Unknown"),
                         "price": premium_match.get("price", "N/A"),
-                        "url": premium_match.get("link", "#")
+                        "url": premium_match.get("product_link", "#")
                     },
                     {
                         "type": "Budget Dupe",
                         "brand": budget_dupe.get("source", "Unknown"),
                         "price": budget_dupe.get("price", "N/A"),
-                        "url": budget_dupe.get("link", "#")
+                        "url": budget_dupe.get("product_link", "#")
                     }
                 ]
             })
@@ -212,7 +236,7 @@ def search_dupes(request: SearchRequest, user_token: dict = Depends(verify_fireb
     with Session(engine) as session:
         new_scan = OutfitScan(
             user_id=user_token.get("uid"), 
-            image_url=request.image_url, # We will upgrade this to a cloud URL soon
+            image_url=search_request.image_url, # We will upgrade this to a cloud URL soon
             analysis_payload=json.dumps(final_results) # The massive JSON string dump
             )
         session.add(new_scan)

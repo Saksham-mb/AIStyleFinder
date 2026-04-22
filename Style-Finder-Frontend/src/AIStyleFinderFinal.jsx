@@ -133,7 +133,7 @@ function ScanCard({ scan, index = 0 }) {
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
-export default function AIStyleFinder2({ onNavigate }) {
+export default function AIStyleFinderFinal({ onNavigate, setIsProcessing }) {
   const { currentUser } = useAuth();
 
   const [appState,      setAppState]      = useState("idle");
@@ -150,6 +150,13 @@ export default function AIStyleFinder2({ onNavigate }) {
   const fileInputRef     = useRef(null);
   const labelIntervalRef = useRef(null);
   const nextIdRef        = useRef(100);
+
+  // Sync the local processing state with the global NavBar lock
+  useEffect(() => {
+    if (setIsProcessing) {
+      setIsProcessing(appState === "scanning" || appState === "searching");
+    }
+  }, [appState, setIsProcessing]);
 
   // ── Fetch recent scans whenever we return to idle ──
   useEffect(() => {
@@ -205,7 +212,7 @@ export default function AIStyleFinder2({ onNavigate }) {
       const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/analyze-image`, {
         method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData,
       });
-      if (!res.ok) throw new Error(res.status === 401 ? "Auth failed." : "Analyze failed.");
+      if (!res.ok) {if (res.status === 429) throw new Error("RATE_LIMIT");throw new Error(res.status === 401 ? "Auth failed." : "Analyze failed.");}
       const data = await res.json();
       setCloudImageURL(data.imageUrl);
       stopLabelCycle();
@@ -213,7 +220,11 @@ export default function AIStyleFinder2({ onNavigate }) {
       setAppState("verifying");
     } catch (err) {
       console.error(err); stopLabelCycle(); setAppState("uploaded");
-      alert("Error scanning image. Is the backend running with a valid Gemini API key?");
+      if (err.message === "RATE_LIMIT") {
+        alert("Whoa, slow down! You've hit the scan limit. Please wait 60 seconds.");
+      } else {
+        alert("Error scanning image. Please check your connection.");
+      }
     }
   };
 
@@ -228,18 +239,21 @@ export default function AIStyleFinder2({ onNavigate }) {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ items: detectedItems.map((i) => i.value), image_url: cloudImageURL }),
       });
-      if (!res.ok) throw new Error("Search failed.");
+      if (!res.ok) {if (res.status === 429) throw new Error("RATE_LIMIT");throw new Error(res.status === 401 ? "Auth failed." : "Analyze failed.");}
       stopLabelCycle(); setResults(await res.json()); setAppState("results");
     } catch (err) {
       console.error(err); stopLabelCycle(); setAppState("verifying");
-      alert("Error finding dupes. Check your Python backend logs.");
+      if (err.message === "RATE_LIMIT") {
+        alert("Whoa, slow down! You've hit the scan limit. Please wait 60 seconds.");
+      } else {
+        alert("Error finding dupes. Please check your connection.");
+      }
     }
   };
 
   // ── Item editing ──
   const handleDeleteItem = (id) => setDetectedItems((p) => p.filter((i) => i.id !== id));
   const handleEditItem   = (id, v) => setDetectedItems((p) => p.map((i) => i.id === id ? { ...i, value: v } : i));
-  const handleAddItem    = () => { const id = nextIdRef.current++; setDetectedItems((p) => [...p, { id, value: "" }]); };
 
   // ── Reset ──
   const handleReset = () => {
@@ -257,7 +271,8 @@ export default function AIStyleFinder2({ onNavigate }) {
   const showVerifyList = ["verifying", "searching", "results"].includes(appState) && detectedItems.length > 0;
   const showFindBtn    = appState === "verifying";
   const showSearching  = appState === "searching";
-  const showResults    = appState === "results" && results.length > 0;
+  const showResultsContainer   = appState === "results";
+  const isProcessing = appState === "scanning" || appState === "searching";
 
   return (
     <>
@@ -349,8 +364,11 @@ export default function AIStyleFinder2({ onNavigate }) {
                   </div>
 
                   {/* Change Button Overlay (When Uploaded) */}
-                  <button className={`absolute bottom-4 right-4 bg-espresso/60 backdrop-blur border border-sand/10 text-sand text-xs uppercase tracking-widest px-4 py-2 rounded-lg transition-all duration-700 hover:bg-espresso shadow ${isIdle ? "opacity-0 pointer-events-none translate-y-2" : "opacity-100 pointer-events-auto translate-y-0"}`}
-                    onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}>
+                  <button 
+                    className={`absolute bottom-4 right-4 bg-espresso/60 backdrop-blur border border-sand/10 text-sand text-xs uppercase tracking-widest px-4 py-2 rounded-lg transition-all duration-700 hover:bg-espresso shadow ${isIdle || isProcessing ? "opacity-0 pointer-events-none translate-y-2" : "opacity-100 pointer-events-auto translate-y-0"}`}
+                    onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+                    disabled={isProcessing}
+                  >
                     Change
                   </button>
 
@@ -390,11 +408,6 @@ export default function AIStyleFinder2({ onNavigate }) {
                         )}
                       </div>
                     ))}
-                    {appState === "verifying" && (
-                      <div onClick={handleAddItem} className="flex items-center justify-center bg-maroon-dark/50 border border-dashed border-maroon rounded-lg px-4 py-3 cursor-pointer hover:bg-maroon-dark/80 hover:border-maroon-light transition-all group">
-                        <span className="font-jost text-xs uppercase tracking-widest text-sand/50 transition-colors group-hover:text-sand">+ Add Item</span>
-                      </div>
-                    )}
                   </div>
                 </div>
 
@@ -414,23 +427,57 @@ export default function AIStyleFinder2({ onNavigate }) {
                   </div>
                 </div>
 
-                <div className={`transition-all duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] overflow-hidden w-full ${showResults ? "max-h-[2500px] opacity-100 mt-2" : "max-h-0 opacity-0 mt-0"}`}>
+                <div className={`transition-all duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] overflow-hidden w-full ${showResultsContainer ? "max-h-[2500px] opacity-100 mt-2" : "max-h-0 opacity-0 mt-0"}`}>
                   <div className="w-full flex flex-col gap-3">
-                    {results.map((result, idx) => (
-                      <div key={idx} className="bg-maroon-dark border border-maroon rounded-xl p-5 flex flex-col gap-3">
-                        <div className="font-instrument text-lg text-sand border-b border-maroon pb-2">
-                          {result.detectedItem}
-                        </div>
-                        <div className="flex flex-col gap-2">
-                          {result.results.map((ri, i) => (
-                            <div key={i} className="font-jost text-sm text-sand/80 flex justify-between items-center">
-                              <span className="truncate pr-2">{ri.brand} <span className="text-sand/40 mx-1">—</span> {ri.type}</span>
-                              <span className="text-gold font-medium shrink-0">{ri.price}</span>
-                            </div>
+                    {results.length === 0 ? (
+                       <div className="text-center py-6 border border-maroon border-dashed rounded-xl bg-maroon-dark/50">
+                          <p className="font-jost text-sand/60 text-sm">We couldn't find exact matches for these items.</p>
+                       </div>
+                    ) : (
+                    results.map((r, idx) => (
+                      <div key={idx} className="bg-espresso-light/30 rounded-xl p-4 border border-maroon/20">
+                        <h3 className="font-jost text-sm font-semibold text-sand mb-3 tracking-wide">{r.detectedItem}</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {r.results.map((ri, i) => (
+                            <a 
+                              key={i}
+                              href={ri.url !== "#" && ri.url ? ri.url : undefined}
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className={`p-3 rounded-lg border transition-all flex flex-col justify-between group ${
+                                ri.url !== "#" && ri.url ? "cursor-pointer" : "cursor-not-allowed opacity-60"
+                              } ${
+                                ri.type === "Premium Match" 
+                                  ? "bg-gold/10 border-gold/30 hover:border-gold/60 hover:bg-gold/20" 
+                                  : "bg-maroon-deeper border-maroon hover:border-maroon-light hover:bg-maroon-dark"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between mb-2">
+                                <span className={`font-jost text-[10px] uppercase tracking-wider ${
+                                  ri.type === "Premium Match" ? "text-gold/80" : "text-sand/60"
+                                }`}>
+                                  {ri.type}
+                                </span>
+                                <svg className={`w-3 h-3 transition-colors ${
+                                  ri.type === "Premium Match" ? "text-gold/50 group-hover:text-gold" : "text-sand/40 group-hover:text-sand"
+                                }`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                </svg>
+                              </div>
+                              <div>
+                                <div className={`font-jost text-sm font-medium transition-colors ${
+                                  ri.type === "Premium Match" ? "text-gold group-hover:text-yellow-400" : "text-sand group-hover:text-white"
+                                }`}>
+                                  {ri.brand}
+                                </div>
+                                <div className="font-jost text-xs mt-1 text-sand/70">{ri.price}</div>
+                              </div>
+                            </a>
                           ))}
                         </div>
                       </div>
-                    ))}
+                    ))
+                  )}
                     <button onClick={handleReset}
                       className="mt-4 text-sand/50 hover:text-sand font-jost text-[11px] uppercase tracking-widest transition-colors py-3 border border-maroon rounded-lg hover:bg-maroon-dark/80 w-full text-center">
                       ↩ Start Over
@@ -448,13 +495,13 @@ export default function AIStyleFinder2({ onNavigate }) {
             <div className="flex items-center">
               <span className="font-jost text-[10px] uppercase tracking-[0.14em] text-sand/30">Recent scans</span>
               <span className="mx-4 flex-1 border-t border-maroon" />
-              <span onClick={() => onNavigate?.("wardrobe")} className="cursor-pointer font-jost text-[10px] tracking-wide text-gold/60 hover:text-gold transition-colors">
+              <span onClick={() => { if (!isProcessing) onNavigate?.("wardrobe"); }} className={`font-jost text-[10px] tracking-wide transition-colors ${isProcessing ? "text-sand/20 cursor-not-allowed" : "cursor-pointer text-gold/60 hover:text-gold"}`}>
                 View all →
               </span>
             </div>
             <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
               {displayScans.map((scan, i) => (
-                <ScanCard key={scan?.id ?? `placeholder-${i}`} scan={scan} index={i} />
+                <ScanCard key={scan?.scan_id ?? `placeholder-${i}`} scan={scan} index={i} />
               ))}
             </div>
           </section>
