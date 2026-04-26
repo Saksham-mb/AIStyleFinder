@@ -302,9 +302,9 @@ export default function AIStyleFinderFinal({ onNavigate, setIsProcessing }) {
               </p>
               <div className="mt-8 flex items-start gap-8">
                 {[
-                  { value: "12,400+", label: "looks scanned" },
-                  { value: "3",       label: "retailers searched" },
-                  { value: "<8s",     label: "avg result" },
+                  // { value: "12,400+", label: "looks scanned" },
+                  { value: "100+",       label: "retailers searched" },
+                  { value: "<10s",     label: "avg result" },
                 ].map((stat, i) => (
                   <div key={i} className="flex flex-col">
                     <span className="font-instrument text-xl text-gold">{stat.value}</span>
